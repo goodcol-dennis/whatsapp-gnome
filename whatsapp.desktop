@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=WhatsApp
+Comment=WhatsApp Web (native wrapper)
+Exec=/home/dennis/projects/whatsapp/whatsapp.py
+Icon=/home/dennis/projects/whatsapp/whatsapp.svg
+Type=Application
+Categories=Network;Chat;InstantMessaging;
+StartupWMClass=com.local.WhatsApp
+StartupNotify=true
+Terminal=false
