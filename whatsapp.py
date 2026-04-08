@@ -75,24 +75,39 @@ PASTE_BRIDGE_JS = """
         // then programmatically open WhatsApp's attach-image flow.
         // But first, try the direct input.files approach on existing inputs.
 
-        // Find all file inputs WhatsApp has in the DOM
-        const inputs = document.querySelectorAll('input[type="file"]');
-        if (inputs.length > 0) {
-            // Use the last file input (WhatsApp re-uses them)
-            const input = inputs[inputs.length - 1];
-            const dt = new DataTransfer();
+        // Find the photo/video file input (not sticker, not document).
+        // WhatsApp's photo input accepts "image/*,video/*" or "image/*".
+        // The sticker input typically accepts only "image/*" with a narrower context.
+        function findPhotoInput() {
+            var inputs = document.querySelectorAll('input[type="file"]');
+            // Prefer an input that accepts video too (that's the photo/video one)
+            for (var i = 0; i < inputs.length; i++) {
+                var acc = (inputs[i].accept || '').toLowerCase();
+                if (acc.indexOf('video') !== -1) return inputs[i];
+            }
+            // Fall back to first input that accepts images
+            for (var i = 0; i < inputs.length; i++) {
+                var acc = (inputs[i].accept || '').toLowerCase();
+                if (acc.indexOf('image') !== -1) return inputs[i];
+            }
+            return inputs.length > 0 ? inputs[0] : null;
+        }
+
+        var photoInput = findPhotoInput();
+        if (photoInput) {
+            var dt = new DataTransfer();
             dt.items.add(file);
-            input.files = dt.files;
-            input.dispatchEvent(new Event('change', {bubbles: true}));
+            photoInput.files = dt.files;
+            photoInput.dispatchEvent(new Event('change', {bubbles: true}));
             return;
         }
 
-        // Fallback: watch for a file input to appear, then fill it
-        const observer = new MutationObserver(function(mutations) {
-            const inp = document.querySelector('input[type="file"]');
+        // Fallback: watch for a file input to appear, then fill the photo one
+        var observer = new MutationObserver(function(mutations) {
+            var inp = findPhotoInput();
             if (inp) {
                 observer.disconnect();
-                const dt = new DataTransfer();
+                var dt = new DataTransfer();
                 dt.items.add(file);
                 inp.files = dt.files;
                 inp.dispatchEvent(new Event('change', {bubbles: true}));

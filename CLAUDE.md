@@ -74,6 +74,10 @@ WebKitGTK does NOT expose clipboard images to the web Clipboard API. The bridge 
 3. On GNOME portal, clipboard contains `application/vnd.portal.files` + `text/uri-list` + `text/plain;charset=utf-8` — **not** `image/*`. Must parse file paths and read the actual file.
 4. Python base64-encodes the image, calls JS `_injectClipboardImage()`
 5. JS sets `.files` on an `<input type="file">` via `DataTransfer` and fires a `change` event. **Do NOT use** `ClipboardEvent` (clipboardData is read-only in WebKit) or `DragEvent` (dataTransfer.files is read-only from JS).
+6. WhatsApp has multiple `<input type="file">` elements — photo/video input (`accept` includes `video`), sticker input, and document input. Must target the correct one by checking the `accept` attribute.
+
+### Sticker Input (future feature)
+WhatsApp Web has a dedicated sticker file input (separate from the photo/video input). It accepts only `image/*` without `video/*`. This can be used to build a custom sticker paste/upload feature. The `findPhotoInput()` helper in the paste bridge JS already distinguishes between the two — the sticker input is the one that accepts `image/*` but NOT `video/*`.
 
 ### Notifications (implemented)
 1. Auto-grant `NotificationPermissionRequest` via `permission-request` signal
