@@ -25,6 +25,24 @@ USER_AGENT = (
     "Version/17.0 Safari/605.1.15"
 )
 
+# Ensure Notification.permission persists as "granted" across sessions.
+# WebKitGTK grants the permission request but doesn't persist the JS-side state.
+NOTIFICATION_FIX_JS = """
+(function() {
+    if (window.Notification) {
+        Object.defineProperty(Notification, 'permission', {
+            get: function() { return 'granted'; },
+            configurable: true
+        });
+        var origRequestPerm = Notification.requestPermission;
+        Notification.requestPermission = function(cb) {
+            if (cb) cb('granted');
+            return Promise.resolve('granted');
+        };
+    }
+})();
+"""
+
 # JavaScript injected to bridge GTK clipboard images into web paste events.
 # ClipboardEvent.clipboardData is read-only in WebKit, so we simulate a file
 # drop instead — WhatsApp Web handles drop events the same as paste.
@@ -148,8 +166,14 @@ class WhatsAppWindow(Adw.ApplicationWindow):
         settings.set_enable_developer_extras(False)
         settings.set_enable_smooth_scrolling(True)
 
-        # Clipboard image bridge
+        # User scripts
         content_manager = self.webview.get_user_content_manager()
+        content_manager.add_script(WebKit.UserScript(
+            NOTIFICATION_FIX_JS,
+            WebKit.UserContentInjectedFrames.ALL_FRAMES,
+            WebKit.UserScriptInjectionTime.START,
+            None, None,
+        ))
         content_manager.add_script(WebKit.UserScript(
             PASTE_BRIDGE_JS,
             WebKit.UserContentInjectedFrames.ALL_FRAMES,
