@@ -15,6 +15,9 @@ gi.require_version("WebKit", "6.0")
 from gi.repository import Gtk, Adw, WebKit, GLib, Gio
 
 
+DEV_LOGGING = "--dev" in sys.argv
+if DEV_LOGGING:
+    sys.argv.remove("--dev")
 APP_ID = "com.local.WhatsApp"
 DATA_DIR = GLib.get_user_data_dir() + "/whatsapp-web"
 WHATSAPP_URL = "https://web.whatsapp.com"
@@ -43,98 +46,177 @@ NOTIFICATION_FIX_JS = """
 })();
 """
 
-# JavaScript injected to bridge GTK clipboard images into web paste events.
-# ClipboardEvent.clipboardData is read-only in WebKit, so we simulate a file
-# drop instead — WhatsApp Web handles drop events the same as paste.
+# JavaScript injected to bridge GTK clipboard into WhatsApp Web.
+# Strategy: try drop event first (works for all file types), fall back to
+# finding the file input element.
 PASTE_BRIDGE_JS = """
 (function() {
     let _waitingForNative = false;
+    const _dev = %DEV%;
+    function _log() { if (_dev) console.log.apply(console, ['[paste]'].concat(Array.from(arguments))); }
+
+    // File extensions we can handle via clipboard bridge
+    var FILE_EXT_RE = new RegExp('[.](png|jpe?g|gif|webp|bmp|mp4|mov|avi|mkv|3gp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip|rar|apk|ogg|mp3|wav|opus)$', 'i');
+    var PATH_RE = new RegExp('^(file:///|/)');
 
     document.addEventListener('paste', function(e) {
+        _log('paste event, files=' + (e.clipboardData ? e.clipboardData.files.length : 'N/A'));
         if (e.clipboardData && e.clipboardData.files.length > 0) return;
-        if (_waitingForNative) return;
+        if (_waitingForNative) { _log('already waiting'); return; }
 
-        const text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
-        const looksLikePath = /^(file:\\/\\/\\/|\\/).*\\.(png|jpe?g|gif|webp|bmp)$/im.test(text.trim());
+        // Only intercept if the clipboard text looks like a file path.
+        // Otherwise let the paste through normally (URLs, text, etc.)
+        var text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+        var looksLikePath = PATH_RE.test(text.trim()) && FILE_EXT_RE.test(text.trim());
+        if (!looksLikePath && text) {
+            _log('not a file path, letting paste through: ' + text.substring(0, 100));
+            return;
+        }
 
         _waitingForNative = true;
         if (looksLikePath) e.preventDefault();
         window.webkit.messageHandlers.clipboardBridge.postMessage('paste');
     }, true);
 
-    window._injectClipboardImage = function(b64, mime) {
-        _waitingForNative = false;
-        mime = mime || 'image/png';
-        const ext = mime.split('/')[1] || 'png';
-        const byteStr = atob(b64);
-        const arr = new Uint8Array(byteStr.length);
-        for (let i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
-        const file = new File([arr], 'clipboard.' + ext, {type: mime});
-
-        // Approach: hijack any <input type="file"> change to deliver our file,
-        // then programmatically open WhatsApp's attach-image flow.
-        // But first, try the direct input.files approach on existing inputs.
-
-        // Find the photo/video file input (not sticker, not document).
-        // WhatsApp's photo input accepts "image/*,video/*" or "image/*".
-        // The sticker input typically accepts only "image/*" with a narrower context.
-        function findPhotoInput() {
-            var inputs = document.querySelectorAll('input[type="file"]');
-            // Prefer an input that accepts video too (that's the photo/video one)
-            for (var i = 0; i < inputs.length; i++) {
-                var acc = (inputs[i].accept || '').toLowerCase();
-                if (acc.indexOf('video') !== -1) return inputs[i];
-            }
-            // Fall back to first input that accepts images
-            for (var i = 0; i < inputs.length; i++) {
-                var acc = (inputs[i].accept || '').toLowerCase();
-                if (acc.indexOf('image') !== -1) return inputs[i];
-            }
-            return inputs.length > 0 ? inputs[0] : null;
+    // Find a suitable file input. The photo/video input (primed via attach menu)
+    // has accept containing "video". If not found, fall back to any file input
+    // except pure sticker inputs (accept="image/*" only).
+    var _capturedInput = null;
+    function findFileInput() {
+        if (_capturedInput && document.contains(_capturedInput)) return _capturedInput;
+        _capturedInput = null;
+        var inputs = document.querySelectorAll('input[type="file"]');
+        // Prefer input with "video" in accept (photo/video input)
+        for (var i = 0; i < inputs.length; i++) {
+            if ((inputs[i].accept || '').indexOf('video') !== -1) return inputs[i];
         }
+        return null;
+    }
 
-        var photoInput = findPhotoInput();
-        if (photoInput) {
-            var dt = new DataTransfer();
-            dt.items.add(file);
-            photoInput.files = dt.files;
-            photoInput.dispatchEvent(new Event('change', {bubbles: true}));
+    function fillInput(input, file) {
+        _log('filling input, accept=' + input.accept);
+        var dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', {bubbles: true}));
+    }
+
+    // Prime the photo input by clicking through the attach menu.
+    // After capturing the input, use history.back() to undo WhatsApp's navigation.
+    var _priming = false;
+    function primeAndInject(file) {
+        var existing = findFileInput();
+        if (existing) {
+            fillInput(existing, file);
+            return;
+        }
+        if (_priming) return;
+        _priming = true;
+        _log('priming photo input...');
+
+        var histLen = window.history.length;
+
+        var origClick = HTMLInputElement.prototype.click;
+        HTMLInputElement.prototype.click = function() {
+            if (this.type === 'file' && (this.accept || '').indexOf('video') !== -1) {
+                HTMLInputElement.prototype.click = origClick;
+                _capturedInput = this;
+                _priming = false;
+                _log('primed, accept=' + this.accept);
+                fillInput(this, file);
+                // Undo WhatsApp's internal navigation
+                setTimeout(function() {
+                    if (window.history.length > histLen) {
+                        _log('undoing navigation via history.back()');
+                        window.history.back();
+                    }
+                }, 100);
+                return;
+            }
+            return origClick.call(this);
+        };
+
+        var hidden = [];
+        var obs = new MutationObserver(function(muts) {
+            muts.forEach(function(m) {
+                m.addedNodes.forEach(function(n) {
+                    if (n.nodeType === 1 && n.style) {
+                        n.style.cssText = 'position:fixed!important;left:-9999px!important;opacity:0!important;pointer-events:none!important;';
+                        hidden.push(n);
+                    }
+                });
+            });
+        });
+        obs.observe(document.body, {childList: true});
+
+        var attachBtn = document.querySelector('span[data-icon="plus"]')
+            || document.querySelector('span[data-icon="attach-menu-plus"]');
+        if (attachBtn) attachBtn = attachBtn.closest('button') || attachBtn.closest('div[role="button"]');
+        if (!attachBtn) attachBtn = document.querySelector('[data-tab="10"]');
+        if (!attachBtn) attachBtn = document.querySelector('span[data-icon="clip"]');
+        if (attachBtn && !attachBtn.click) attachBtn = attachBtn.closest('div[role="button"]');
+
+        if (!attachBtn) {
+            _log('no attach button found');
+            HTMLInputElement.prototype.click = origClick;
+            obs.disconnect();
+            _priming = false;
             return;
         }
 
-        // Fallback: watch for a file input to appear, then fill the photo one
-        var observer = new MutationObserver(function(mutations) {
-            var inp = findPhotoInput();
-            if (inp) {
-                observer.disconnect();
-                var dt = new DataTransfer();
-                dt.items.add(file);
-                inp.files = dt.files;
-                inp.dispatchEvent(new Event('change', {bubbles: true}));
+        _log('clicking attach button');
+        attachBtn.click();
+
+        var attempts = 0;
+        var iv = setInterval(function() {
+            var btn = null;
+            document.querySelectorAll('div[role="button"], button, li').forEach(function(el) {
+                var txt = el.textContent || '';
+                if (!btn && /photo/i.test(txt) && !/sticker/i.test(txt)) btn = el;
+            });
+            if (btn) {
+                clearInterval(iv);
+                _log('clicking photo/video menu item');
+                btn.click();
+                setTimeout(function() {
+                    obs.disconnect();
+                    hidden.forEach(function(n) { n.style.cssText = ''; });
+                    if (_priming) {
+                        HTMLInputElement.prototype.click = origClick;
+                        _priming = false;
+                        _log('priming did not capture a file input');
+                    }
+                }, 300);
+            } else if (++attempts > 40) {
+                clearInterval(iv);
+                HTMLInputElement.prototype.click = origClick;
+                obs.disconnect();
+                hidden.forEach(function(n) { n.style.cssText = ''; });
+                _priming = false;
+                _log('priming timed out');
             }
-        });
-        observer.observe(document.body, {childList: true, subtree: true});
+        }, 50);
+    }
 
-        // Click the attach button to trigger file input creation
-        const attachBtn = document.querySelector('[data-tab="10"]')     // attach button
-                       || document.querySelector('[title="Attach"]')
-                       || document.querySelector('span[data-icon="plus"]')?.closest('button')
-                       || document.querySelector('span[data-icon="attach-menu-plus"]')?.closest('div[role="button"]');
-        if (attachBtn) {
-            attachBtn.click();
-            // Then click the photo/video option
-            setTimeout(function() {
-                const photoBtn = document.querySelector('span[data-icon="attach-image"]')?.closest('button')
-                              || document.querySelector('span[data-icon="attach-image"]')?.closest('div[role="button"]');
-                if (photoBtn) photoBtn.click();
-            }, 300);
-        }
+    window._injectClipboardFile = function(b64, mime, filename) {
+        _waitingForNative = false;
+        mime = mime || 'application/octet-stream';
+        filename = filename || ('clipboard.' + (mime.split('/')[1] || 'bin'));
+        _log('injecting file: ' + filename + ', mime=' + mime + ', b64len=' + b64.length);
 
-        // Clean up observer after 5 seconds
-        setTimeout(function() { observer.disconnect(); }, 5000);
+        var byteStr = atob(b64);
+        var arr = new Uint8Array(byteStr.length);
+        for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
+        var file = new File([arr], filename, {type: mime});
+
+        primeAndInject(file);
     };
 
+    // Keep old name as alias
+    window._injectClipboardImage = window._injectClipboardFile;
+
     window._injectClipboardImageFailed = function() {
+        _log('clipboard injection failed');
         _waitingForNative = false;
     };
 })();
@@ -178,8 +260,10 @@ class WhatsAppWindow(Adw.ApplicationWindow):
         settings.set_enable_webaudio(True)
         settings.set_enable_encrypted_media(True)
         settings.set_javascript_can_access_clipboard(True)
-        settings.set_enable_developer_extras(False)
+        settings.set_enable_developer_extras(DEV_LOGGING)
         settings.set_enable_smooth_scrolling(True)
+        if DEV_LOGGING:
+            settings.set_enable_write_console_messages_to_stdout(True)
 
         # User scripts
         content_manager = self.webview.get_user_content_manager()
@@ -189,8 +273,9 @@ class WhatsAppWindow(Adw.ApplicationWindow):
             WebKit.UserScriptInjectionTime.START,
             None, None,
         ))
+        paste_js = PASTE_BRIDGE_JS.replace('%DEV%', 'true' if DEV_LOGGING else 'false')
         content_manager.add_script(WebKit.UserScript(
-            PASTE_BRIDGE_JS,
+            paste_js,
             WebKit.UserContentInjectedFrames.ALL_FRAMES,
             WebKit.UserScriptInjectionTime.START,
             None, None,
@@ -209,6 +294,8 @@ class WhatsAppWindow(Adw.ApplicationWindow):
         self.webview.connect("show-notification", self._on_show_notification)
         # Open external links in default browser
         self.webview.connect("decide-policy", self._on_decide_policy)
+        # Intercept target="_blank" links (new window requests)
+        self.webview.connect("create", self._on_create_new_window)
 
         self.webview.set_vexpand(True)
         self.webview.set_hexpand(True)
@@ -226,81 +313,107 @@ class WhatsAppWindow(Adw.ApplicationWindow):
 
     # -- Clipboard image bridge --
 
+    @staticmethod
+    def _devlog(msg):
+        if DEV_LOGGING:
+            print(f"[paste] {msg}")
+
     def _on_paste_requested(self, _content_manager, message):
         clipboard = self.get_clipboard()
         formats = clipboard.get_formats()
         mime_types = formats.get_mime_types() or []
+        self._devlog(f"clipboard mimes: {mime_types}")
 
         if any(m.startswith("image/") for m in mime_types):
+            self._devlog("trying texture read")
             clipboard.read_texture_async(None, self._on_clipboard_texture, None)
         elif "text/plain" in mime_types or "text/uri-list" in mime_types:
+            self._devlog("trying text read")
             clipboard.read_text_async(None, self._on_clipboard_text, None)
         else:
+            self._devlog("no usable format")
             self._inject_failed()
 
     def _on_clipboard_texture(self, clipboard, result, _user_data):
         try:
             texture = clipboard.read_texture_finish(result)
-        except GLib.Error:
+        except GLib.Error as e:
+            self._devlog(f"texture failed: {e}, falling back to text")
             clipboard.read_text_async(None, self._on_clipboard_text, None)
             return
         if texture is None:
+            self._devlog("texture is None")
             self._inject_failed()
             return
+        self._devlog(f"got texture {texture.get_width()}x{texture.get_height()}")
         self._send_texture(texture)
 
     def _on_clipboard_text(self, clipboard, result, _user_data):
         try:
             text = clipboard.read_text_finish(result)
-        except GLib.Error:
+        except GLib.Error as e:
+            self._devlog(f"text read failed: {e}")
             self._inject_failed()
             return
         if not text:
+            self._devlog("text is empty")
             self._inject_failed()
             return
+        self._devlog(f"clipboard text: {text[:200]!r}")
 
         path = text.strip()
         if path.startswith("file://"):
             path = unquote(urlparse(path).path)
-        # Also handle multiple URIs (take first image)
+        # Handle multiple URIs (take first supported file)
         for line in path.splitlines():
             line = line.strip()
             if line.startswith("file://"):
                 line = unquote(urlparse(line).path)
-            if os.path.isfile(line) and line.lower().endswith(
-                (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
-            ):
+            if os.path.isfile(line):
                 path = line
                 break
         else:
-            if not (os.path.isfile(path) and path.lower().endswith(
-                (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
-            )):
+            if not os.path.isfile(path):
                 self._inject_failed()
                 return
 
+        self._inject_file(path)
+
+    # Mime type map for supported file extensions
+    MIME_TYPES = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+        ".mp4": "video/mp4", ".mov": "video/quicktime", ".avi": "video/x-msvideo",
+        ".mkv": "video/x-matroska", ".3gp": "video/3gpp",
+        ".pdf": "application/pdf",
+        ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".ppt": "application/vnd.ms-powerpoint", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".txt": "text/plain", ".zip": "application/zip", ".rar": "application/x-rar-compressed",
+        ".apk": "application/vnd.android.package-archive",
+        ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".opus": "audio/opus",
+    }
+
+    def _inject_file(self, path):
         try:
             with open(path, "rb") as f:
                 data = f.read()
         except OSError:
             self._inject_failed()
             return
-
         b64 = base64.b64encode(data).decode("ascii")
-        # Detect mime type from extension
         ext = os.path.splitext(path)[1].lower()
-        mime = {
-            ".png": "image/png", ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg", ".gif": "image/gif",
-            ".webp": "image/webp", ".bmp": "image/bmp",
-        }.get(ext, "image/png")
-        js = f"window._injectClipboardImage('{b64}', '{mime}');"
+        mime = self.MIME_TYPES.get(ext, "application/octet-stream")
+        filename = os.path.basename(path)
+        self._devlog(f"injecting file ({len(data)} bytes, {mime}, {filename})")
+        js = f"window._injectClipboardFile('{b64}', '{mime}', '{filename}');"
         self.webview.evaluate_javascript(js, -1, None, None, None, None, None)
 
     def _send_texture(self, texture):
         png_bytes = texture.save_to_png_bytes()
         b64 = base64.b64encode(png_bytes.get_data()).decode("ascii")
-        js = f"window._injectClipboardImage('{b64}', 'image/png');"
+        self._devlog(f"injecting texture ({len(png_bytes.get_data())} bytes)")
+        js = f"window._injectClipboardFile('{b64}', 'image/png', 'clipboard.png');"
         self.webview.evaluate_javascript(js, -1, None, None, None, None, None)
 
     def _inject_failed(self):
@@ -349,6 +462,17 @@ class WhatsAppWindow(Adw.ApplicationWindow):
         gnome_notif.set_default_action("app.activate")
         app.send_notification(None, gnome_notif)
         return True
+
+    # -- New window requests (target="_blank") --
+
+    @staticmethod
+    def _on_create_new_window(_webview, nav_action):
+        """Open target="_blank" links in the system browser."""
+        req = nav_action.get_request()
+        uri = req.get_uri() if req else None
+        if uri:
+            Gio.AppInfo.launch_default_for_uri(uri, None)
+        return None
 
     # -- Navigation policy --
 
