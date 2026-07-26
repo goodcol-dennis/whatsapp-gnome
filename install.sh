@@ -17,8 +17,11 @@ mkdir -p "$ICON_DIR"
 cp "$SCRIPT_DIR/whatsapp.svg" "$ICON_DIR/whatsapp.svg"
 gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor 2>/dev/null || true
 
-# Install desktop entry
-cp "$SCRIPT_DIR/whatsapp.desktop" ~/.local/share/applications/whatsapp.desktop
+# Install desktop entry, rewriting Exec to wherever the project actually lives
+# so the launcher survives the project directory being moved.
+mkdir -p ~/.local/share/applications
+sed "s|^Exec=.*|Exec=$SCRIPT_DIR/whatsapp.py|" \
+    "$SCRIPT_DIR/whatsapp.desktop" > ~/.local/share/applications/whatsapp.desktop
 
 # Update desktop database
 update-desktop-database ~/.local/share/applications 2>/dev/null || true

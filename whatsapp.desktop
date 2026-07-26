@@ -1,8 +1,8 @@
 [Desktop Entry]
 Name=WhatsApp
 Comment=WhatsApp Web (native wrapper)
-Exec=/home/dennis/projects/whatsapp/whatsapp.py
-Icon=/home/dennis/projects/whatsapp/whatsapp.svg
+Exec=/home/dennis/projects/gct/whatsapp/whatsapp.py
+Icon=whatsapp
 Type=Application
 Categories=Network;Chat;InstantMessaging;
 StartupWMClass=com.local.WhatsApp

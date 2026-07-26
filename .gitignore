@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.pyo
 .claude/
+
+# Local working notes — not for the public repo
+SWEEP_NOTES.md

@@ -19,8 +19,18 @@ System packages required: `gir1.2-webkit-6.0`, GTK4, libadwaita, Python 3.
 
 ```bash
 ./whatsapp.py          # Run the app
+./whatsapp.py --dev    # Run with WebKit inspector + [paste] logging to stdout
 ./install.sh           # Kill running instance, install icon + desktop entry, relaunch
 ```
+
+**Agents:** neither command above may be run on the user's live session — see
+Critical Rule 8. Test through [narkina](../narkina/) instead: it is a lib-only
+Rust crate, so add `narkina = { path = "../narkina" }` and drive the app with
+`Session::builder("/home/dennis/projects/gct/whatsapp/whatsapp.py")` —
+`whatsapp.py` has a shebang, so cage launches it directly. Use
+`.stderr_to_file()` + `wait_for_log()` for readiness, `press_key`/`key_combo`
+for input, `assert_alive()` for liveness. `cage`, `wtype`, `wlrctl` are
+installed.
 
 ## Project Structure
 
@@ -55,6 +65,7 @@ whatsapp/
 5. **No debug logging in production** — No `console.log`, `print()`, `set_enable_developer_extras(True)`, or `set_enable_write_console_messages_to_stdout(True)` in committed code.
 6. **Never monkey-patch browser APIs** — Overriding `AudioContext`, `Audio`, `URL.createObjectURL`, or similar native constructors in user scripts breaks WhatsApp's audio/media playback. Debug hooks that wrap these APIs must be removed before committing.
 7. **Scope discipline** — Only modify files inside this project directory. Never modify files in sibling/adjacent projects (e.g., `../telegram/`) without explicit user approval.
+8. **Headless testing only — never launch on the live session** — Any run of the app for testing goes through [narkina](../narkina/), the jailed headless Wayland harness (cage + wtype + wlrctl, isolated `XDG_RUNTIME_DIR` per session). Do **not** run `./whatsapp.py` or `./install.sh` on the user's real compositor — `install.sh` relaunches the app by design, so it pops a window. This applies to subagents too: they inherit the host Wayland session, so the constraint must be stated explicitly in their prompt.
 
 ## Change Propagation Map
 
