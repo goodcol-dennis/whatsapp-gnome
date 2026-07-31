@@ -53,7 +53,7 @@ def update_badge(self, count):
         "com.canonical.Unity.LauncherEntry",
         "Update",
         GLib.Variant("(sa{sv})", (
-            "application://whatsapp.desktop",
+            "application://com.local.WhatsApp.desktop",
             {
                 "count": GLib.Variant("x", count),
                 "count-visible": GLib.Variant("b", count > 0),
@@ -64,6 +64,6 @@ def update_badge(self, count):
 
 ### Key details
 - The DBus object path should match the app ID: `/com/local/WhatsApp`
-- The desktop file reference must match the installed `.desktop` filename: `application://whatsapp.desktop`
+- The desktop file reference must match the installed `.desktop` filename: `application://com.local.WhatsApp.desktop`
 - The `"x"` variant type is a 64-bit int (required by the Unity Launcher API)
 - No extra dependencies needed — just `Gio` and `GLib` which are already imported

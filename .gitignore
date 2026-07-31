@@ -5,3 +5,12 @@ __pycache__/
 
 # Local working notes — not for the public repo
 SWEEP_NOTES.md
+
+# Editor / MCP local config
+.vscode/
+.mcp.json
+
+# Rust e2e build artifacts
+tests/narkina-e2e/target/
+
+nohup.out

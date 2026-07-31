@@ -1,0 +1,10 @@
+[package]
+name = "whatsapp-e2e"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+narkina = { path = "../../../narkina" }
