@@ -175,6 +175,12 @@ feature would need its own selector for the image-only input.
 Ctrl+=/− /0 and Ctrl+scroll. Persisted to config.json. Default 1.0, range 0.5–3.0.
 
 ### Robustness (implemented)
+- `WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1` set before `import gi` (playbook §4
+  #29 — Arrow Lake-P dmabuf shearing on i915; `WHATSAPP_FORCE_DMABUF=1`
+  bypasses the guard to re-test the hardware).
+- `set_enable_page_cache(False)` (playbook §4 #28 — bfcache parks documents
+  with open IndexedDB connections and deadlocks the next page's `open()`;
+  verified on Slack, preventative here).
 - `web-process-terminated` → `reload()`, rate-limited to one per 10 s.
 - `Gio.bus_get_sync` wrapped in try/except — headless sessions have no bus;
   badge degrades instead of crashing at startup.

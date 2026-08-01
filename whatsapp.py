@@ -10,6 +10,16 @@ import sys
 import time
 from urllib.parse import unquote, urlparse
 
+# Arrow Lake-P dmabuf shearing (playbook §4 #29): with the GPU on i915, GBM
+# mis-negotiates dmabuf tiling modifiers and frames arrive sheared into
+# diagonal bands — in every WebKitGTK app (reproduced in stock GNOME Web).
+# Disabling only GBM sidesteps the bug while keeping the zero-copy dmabuf
+# path; WEBKIT_DISABLE_DMABUF_RENDERER would also fix it but costs noticeable
+# input latency. Must be set before the web process spawns, hence before gi.
+# WHATSAPP_FORCE_DMABUF=1 disables this guard (to re-test the hardware).
+if os.environ.get("WHATSAPP_FORCE_DMABUF") != "1":
+    os.environ.setdefault("WEBKIT_DMABUF_RENDERER_DISABLE_GBM", "1")
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -407,6 +417,11 @@ class WhatsAppWindow(Adw.ApplicationWindow):
         settings.set_javascript_can_open_windows_automatically(True)
         settings.set_enable_developer_extras(DEV_LOGGING)
         settings.set_enable_smooth_scrolling(True)
+        # bfcache deadlock (playbook §4 #28, verified on Slack): a suspended
+        # document keeps its IndexedDB connection open, wedging the next
+        # page's open() forever. WhatsApp Web holds IndexedDB the same way,
+        # and a single-window wrapper gets nothing from bfcache — off.
+        settings.set_enable_page_cache(False)
         if DEV_LOGGING:
             settings.set_enable_write_console_messages_to_stdout(True)
 
