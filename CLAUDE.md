@@ -174,6 +174,18 @@ feature would need its own selector for the image-only input.
 ### Zoom (implemented)
 Ctrl+=/− /0 and Ctrl+scroll. Persisted to config.json. Default 1.0, range 0.5–3.0.
 
+### Known engine issue — watch for, not yet observed here
+WebKit bug 239925 (GTK): service-worker `FetchEvent.respondWith` *streaming*
+is broken — received media errors (MEDIA_ERR_DECODE/SRC_NOT_SUPPORTED) while
+just-sent media plays, because sent copies use local `blob:` URLs and received
+ones stream through the SW. That asymmetry is the fingerprint; don't chase
+codecs. Telegram hit and fixed it 2026-07-31 by disabling the `ServiceWorkers`
+runtime feature (playbook §4). WhatsApp Web decrypts media into `blob:` URLs
+and MSE rather than SW streaming, so it should be unaffected — but if received
+voice notes/videos/GIFs ever die while sent ones play, this is the first
+suspect. Fix pattern: `set_feature_enabled` on the `ServiceWorkers` feature
+from `WebKit.Settings.get_all_features()`, behind a config escape hatch.
+
 ### Robustness (implemented)
 - `WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1` set before `import gi` (playbook §4
   #29 — Arrow Lake-P dmabuf shearing on i915; `WHATSAPP_FORCE_DMABUF=1`
