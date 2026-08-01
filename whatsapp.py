@@ -116,10 +116,12 @@ PASTE_BRIDGE_JS = """
     let _waitingForNative = false;
     let _pendingText = null;
     let _watchdog = null;
+    let _injecting = false;
     const _dev = %DEV%;
     function _log() { if (_dev) console.log.apply(console, ['[paste]'].concat(Array.from(arguments))); }
 
     document.addEventListener('paste', function(e) {
+        if (_injecting) return;
         _log('paste event, files=' + (e.clipboardData ? e.clipboardData.files.length : 'N/A'));
         if (e.clipboardData && e.clipboardData.files.length > 0) return;
         if (_waitingForNative) { _log('already waiting'); return; }
@@ -328,7 +330,12 @@ PASTE_BRIDGE_JS = """
         dt.items.add(file);
         var pasteTarget = document.activeElement || findDropTarget();
         var pasteEv = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
-        pasteTarget.dispatchEvent(pasteEv);
+        _injecting = true;
+        try {
+            pasteTarget.dispatchEvent(pasteEv);
+        } finally {
+            _injecting = false;
+        }
         _log('synthetic paste defaultPrevented=' + pasteEv.defaultPrevented);
         if (pasteEv.defaultPrevented) return;
 
@@ -443,9 +450,12 @@ class WhatsAppWindow(Adw.ApplicationWindow):
         # -- User scripts --
         content_manager = self.webview.get_user_content_manager()
         paste_js = PASTE_BRIDGE_JS.replace('%DEV%', 'true' if DEV_LOGGING else 'false')
+        # TOP_FRAME only: the composer lives in the top frame, and an
+        # ALL_FRAMES bridge posts one 'paste' per iframe — duplicate native
+        # round-trips (playbook #30)
         content_manager.add_script(WebKit.UserScript(
             paste_js,
-            WebKit.UserContentInjectedFrames.ALL_FRAMES,
+            WebKit.UserContentInjectedFrames.TOP_FRAME,
             WebKit.UserScriptInjectionTime.START,
             None, None,
         ))
@@ -606,8 +616,12 @@ class WhatsAppWindow(Adw.ApplicationWindow):
             f"dl_dir={dl_dir}\n"
             f"dl_files={','.join(dl_files)}\n"
         )
-        with open(TEST_STATE_FILE, "w") as f:
+        # Atomic write so the e2e harness never reads a half-written dump
+        # (playbook #31)
+        tmp = TEST_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
             f.write(state)
+        os.replace(tmp, TEST_STATE_FILE)
         self._devlog(f"state dumped to {TEST_STATE_FILE}")
         return True
 
