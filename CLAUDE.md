@@ -175,18 +175,34 @@ feature would need its own selector for the image-only input.
 ### Zoom (implemented)
 Ctrl+=/− /0 and Ctrl+scroll. Persisted to config.json. Default 1.0, range 0.5–3.0.
 
-### WebKit bug 239925 — observed here, fixed (service workers off)
-WebKit bug 239925 (GTK): service-worker `FetchEvent.respondWith` delivery is
-unreliable on this engine. Observed 2026-08-03 as (a) scattered blank sprites
-in the emoji picker under *both* Chrome and Safari UAs — SW-served static
-assets failing per-request — and (b) received videos that download but never
-play, while just-sent copies (local `blob:` URLs) were fine. That asymmetry is
-the diagnostic fingerprint; don't chase codecs or UA theories first (we did —
-an AVIF/UA theory was falsified by the UA A/B). Fix (telegram's, ported):
-disable the `ServiceWorkers` runtime feature via `_set_webkit_feature` at
-startup; cost is only the offline boot shell. config.json
-`{"enable_service_workers": true}` re-enables to re-test after engine
-upgrades.
+### Media/emoji failures of 2026-08-03 — root causes (corrected attribution)
+Two symptoms, three theories tried, two were wrong. Final attribution:
+1. **Emoji picker gaps = poisoned HTTP disk cache**, not AVIF/UA (falsified by
+   UA A/B: gaps under both UAs) and not SW/239925 (falsified: SW-off changed
+   nothing). Proof: the exact failing sprite URL fetched 200 + rendered from a
+   fresh-profile jailed session. Fix: stop app, move `cache/` +
+   `serviceworkers/` aside, relaunch — login (cookies + `storage/`) survives.
+   Cache poisoning was likely aggravated by pkill-mid-write (install cycles)
+   and the network-process crashes below.
+2. **Video "downloads but won't play" + spontaneous logout =
+   `WebKitNetworkProcess` segfaults** (kernel journal: `segfault at 10`,
+   identical IP in libwebkitgtk 2.52.3, twice — deterministic NULL deref),
+   correlating with media fetches. The network process hosts the HTTP cache,
+   Cache API, IndexedDB server, and WebSockets — so one crash yields: console
+   `Network process crashed` on the WS, `Cache API operation failed: Internal
+   error` spam, `Indexed Database server` internal errors, truncated media,
+   and the client dumping to the login screen (auth lives in IndexedDB).
+   **That cluster is the fingerprint.** No fixed webkit2gtk available yet
+   (2.52.3 is still current); watch for the security update the playbook
+   tracks. Session storage on disk survives crashes — restart before
+   re-scanning the QR.
+
+Service workers remain disabled (`enable_service_workers` config re-enables):
+239925 is real in-family (telegram, verified) even though it was NOT the cause
+of whatsapp's symptoms; SW-off also shrinks the network process's Cache API
+surface. Misc court noise seen in --dev, all cosmetic: `calc()` in SVG
+attributes rejected (WhatsApp's progress-ring UI, Chrome-only syntax), "too
+many active WebGL contexts", CSP `manifest-src` unrecognized.
 
 ### Robustness (implemented)
 - `WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1` set before `import gi` (playbook §4
