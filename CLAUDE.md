@@ -199,6 +199,10 @@ from `WebKit.Settings.get_all_features()`, behind a config escape hatch.
 - `hasattr(WebKit, "ClipboardPermissionRequest")` guard before isinstance.
 - Spell checking on, languages from `GLib.get_language_names()` filtered
   (entries containing `.` and `C` match no hunspell dictionary).
+- Context menu filtered to spelling entries (playbook #32): WebKit's menu is
+  the only UI for applying a correction, so it shows when it carries spelling
+  suggestions — stripped to just those — and is suppressed otherwise so
+  WhatsApp's own right-click menus win. No browser chrome in the app.
 
 ### Dock Badge (implemented)
 1. `notify::title` → **anchored** regex `^\((\d+)\)` on "(N) WhatsApp"

@@ -465,6 +465,8 @@ class WhatsAppWindow(Adw.ApplicationWindow):
             self._on_paste_requested,
         )
 
+        # Filter WebKit's context menu down to spelling entries (playbook #32)
+        self.webview.connect("context-menu", self._on_context_menu)
         # Watch title changes for unread badge
         self.webview.connect("notify::title", self._on_title_changed)
         # Allow notification and media permission requests
@@ -779,6 +781,34 @@ class WhatsAppWindow(Adw.ApplicationWindow):
         app = self.get_application()
         if app:
             app.update_badge(count)
+
+    # -- Context menu --
+
+    # Spelling entries WebKit builds when right-clicking a misspelled word
+    SPELLING_ACTIONS = (
+        WebKit.ContextMenuAction.SPELLING_GUESS,
+        WebKit.ContextMenuAction.NO_GUESSES_FOUND,
+        WebKit.ContextMenuAction.IGNORE_SPELLING,
+        WebKit.ContextMenuAction.LEARN_SPELLING,
+        WebKit.ContextMenuAction.IGNORE_GRAMMAR,
+    )
+
+    def _on_context_menu(self, _webview, context_menu, _hit_test_result):
+        """Hide WebKit's menu so WhatsApp's own right-click menus work, but
+        keep it when it carries spelling suggestions — stripped down to just
+        those, so no browser chrome leaks into the app.
+
+        Returning True suppresses the menu; False shows what we left in it.
+        """
+        items = context_menu.get_items()
+        spelling = [i for i in items
+                    if i.get_stock_action() in self.SPELLING_ACTIONS]
+        if not spelling:
+            return True
+        for item in items:
+            if item not in spelling:
+                context_menu.remove(item)
+        return False
 
     # -- Permissions --
 
