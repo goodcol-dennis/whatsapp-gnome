@@ -85,16 +85,31 @@ def _save_zoom(level):
         json.dump(config, f)
 
 
+def _load_config(key, default):
+    try:
+        with open(CONFIG_FILE) as f:
+            return json.load(f).get(key, default)
+    except (OSError, ValueError, AttributeError):
+        return default
+
+
+def _set_webkit_feature(settings, identifier, enabled):
+    """Toggle a WebKit runtime feature by identifier. Returns True if applied."""
+    features = WebKit.Settings.get_all_features()
+    for i in range(features.get_length()):
+        feature = features.get(i)
+        if feature.get_identifier() == identifier:
+            settings.set_feature_enabled(feature, enabled)
+            return True
+    return False
+
+
 def _load_user_agent():
     """config.json {"user_agent": ...} overrides the default — lets a stale UA
     be fixed without editing code."""
-    try:
-        with open(CONFIG_FILE) as f:
-            ua = json.load(f).get("user_agent")
-        if isinstance(ua, str) and ua.strip():
-            return ua.strip()
-    except (OSError, ValueError, AttributeError):
-        pass
+    ua = _load_config("user_agent", None)
+    if isinstance(ua, str) and ua.strip():
+        return ua.strip()
     return USER_AGENT_DEFAULT
 
 
@@ -429,6 +444,17 @@ class WhatsAppWindow(Adw.ApplicationWindow):
         # page's open() forever. WhatsApp Web holds IndexedDB the same way,
         # and a single-window wrapper gets nothing from bfcache — off.
         settings.set_enable_page_cache(False)
+        # WebKit bug 239925 (playbook §4): service-worker respondWith delivery
+        # is unreliable on this engine. Observed here 2026-08-03 as scattered
+        # blank emoji-picker sprites and received videos that download but
+        # never play (sent copies use local blob: URLs and were fine — the
+        # diagnostic asymmetry). Telegram hit the same bug and disabling the
+        # ServiceWorkers feature fixed it; cost is only the offline boot
+        # shell. config.json {"enable_service_workers": true} re-enables to
+        # re-test after a WebKit upgrade.
+        if not _load_config("enable_service_workers", False):
+            if _set_webkit_feature(settings, "ServiceWorkers", False):
+                self._devlog("service workers disabled (WebKit bug 239925)")
         if DEV_LOGGING:
             settings.set_enable_write_console_messages_to_stdout(True)
 

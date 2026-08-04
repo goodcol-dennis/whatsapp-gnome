@@ -66,7 +66,8 @@ Untracked and intentionally ignored: `.claude/`, `.vscode/`, `.mcp.json`,
 - App ID: `com.local.WhatsApp` (`com.local.WhatsApp.Test` in `--test` mode)
 - Data directory: `~/.local/share/whatsapp-web/` (`whatsapp-web-test/` in test mode)
 - Config: `~/.local/share/whatsapp-web/config.json` — `zoom` (persisted by the
-  zoom shortcuts) and `user_agent` (manual override for a stale UA)
+  zoom shortcuts), `user_agent` (manual override for a stale UA), and
+  `enable_service_workers` (re-enable SW to re-test WebKit bug 239925)
 - User agent: Chrome 151 shape (`USER_AGENT_DEFAULT`) — **required**; WhatsApp
   serves an "update your browser" wall to UAs it considers stale. Bump every
   few months or override via config.json.
@@ -174,17 +175,18 @@ feature would need its own selector for the image-only input.
 ### Zoom (implemented)
 Ctrl+=/− /0 and Ctrl+scroll. Persisted to config.json. Default 1.0, range 0.5–3.0.
 
-### Known engine issue — watch for, not yet observed here
-WebKit bug 239925 (GTK): service-worker `FetchEvent.respondWith` *streaming*
-is broken — received media errors (MEDIA_ERR_DECODE/SRC_NOT_SUPPORTED) while
-just-sent media plays, because sent copies use local `blob:` URLs and received
-ones stream through the SW. That asymmetry is the fingerprint; don't chase
-codecs. Telegram hit and fixed it 2026-07-31 by disabling the `ServiceWorkers`
-runtime feature (playbook §4). WhatsApp Web decrypts media into `blob:` URLs
-and MSE rather than SW streaming, so it should be unaffected — but if received
-voice notes/videos/GIFs ever die while sent ones play, this is the first
-suspect. Fix pattern: `set_feature_enabled` on the `ServiceWorkers` feature
-from `WebKit.Settings.get_all_features()`, behind a config escape hatch.
+### WebKit bug 239925 — observed here, fixed (service workers off)
+WebKit bug 239925 (GTK): service-worker `FetchEvent.respondWith` delivery is
+unreliable on this engine. Observed 2026-08-03 as (a) scattered blank sprites
+in the emoji picker under *both* Chrome and Safari UAs — SW-served static
+assets failing per-request — and (b) received videos that download but never
+play, while just-sent copies (local `blob:` URLs) were fine. That asymmetry is
+the diagnostic fingerprint; don't chase codecs or UA theories first (we did —
+an AVIF/UA theory was falsified by the UA A/B). Fix (telegram's, ported):
+disable the `ServiceWorkers` runtime feature via `_set_webkit_feature` at
+startup; cost is only the offline boot shell. config.json
+`{"enable_service_workers": true}` re-enables to re-test after engine
+upgrades.
 
 ### Robustness (implemented)
 - `WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1` set before `import gi` (playbook §4
